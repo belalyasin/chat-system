@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Conversations\ConversationsController;
+use App\Http\Controllers\Conversations\MessagesController;
 use App\Http\Controllers\ProfileController;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
@@ -28,6 +29,9 @@ Route::get('/', function () {
 
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/conversation', [ConversationsController::class, 'index'])->name('conversation.index');
+    Route::post('/conversation', [ConversationsController::class, 'store'])->name('conversation.store');
+    Route::get('/conversation/{conversation}', [ConversationsController::class, 'show'])->name('conversation.show');
+    Route::post('/conversation/{conversation}/messages', [MessagesController::class, 'store'])->name('conversation.messages.store');
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');

@@ -32,7 +32,7 @@ const showingNavigationDropdown = ref(false);
                                     Dashboard
                                 </NavLink>
                                 <NavLink :href="route('conversation.index')"
-                                    :active="route().current('conversation.index')">
+                                    :active="route().current('conversation.*')">
                                     Conversation
                                 </NavLink>
                             </div>
@@ -97,7 +97,7 @@ const showingNavigationDropdown = ref(false);
                             Dashboard
                         </ResponsiveNavLink>
                         <ResponsiveNavLink :href="route('conversation.index')"
-                            :active="route().current('conversation.index')">
+                            :active="route().current('conversation.*')">
                             Conversation
                         </ResponsiveNavLink>
                     </div>

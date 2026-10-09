@@ -4,35 +4,140 @@ namespace App\Http\Controllers\Conversations;
 
 use App\Http\Controllers\Controller;
 use App\Models\Conversation;
+use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 class ConversationsController extends Controller
 {
-    //
-    public function index(Conversation $conversation, Request $request)
+    /**
+     * The chat page with no conversation open.
+     */
+    public function index(Request $request)
     {
-        $conversations = Conversation::with(['messages', 'users'])->get();
-        //    $conversations = Conversation::all();
-        $conversations->map(function ($conversation) {
-            $conversation->setAttribute('user_name', $conversation->getUserName());
-            $conversation->setAttribute('first_message_date', optional($conversation->messages()->first())->created_at);
-            // $conversation->setAttribute('is_read', auth()->user()->hasRead($conversation) !== null);
-            $conversation->setAttribute('unread_count', $conversation->users()->whereNull('read_at')->count());
+        return inertia('Conversations/Index', [
+            'conversations' => $this->conversationList($request->user()),
+            'conversation' => null,
+            'users' => $this->otherUsers($request->user()),
+        ]);
+    }
+
+    /**
+     * The chat page with one conversation open. Opening it marks it as read.
+     */
+    public function show(Request $request, Conversation $conversation)
+    {
+        $user = $request->user();
+        abort_unless($conversation->hasParticipant($user), 403);
+
+        $conversation->markAsReadBy($user);
+        $conversation->load(['users', 'messages' => fn ($messages) => $messages->with('user')->oldest()->orderBy('id')]);
+
+        return inertia('Conversations/Index', [
+            'conversations' => $this->conversationList($user),
+            'conversation' => [
+                'uuid' => $conversation->uuid,
+                'title' => $conversation->titleFor($user),
+                'users' => $conversation->users->map(fn (User $member) => [
+                    'id' => $member->id,
+                    'name' => $member->name,
+                ])->values(),
+                'messages' => $conversation->messages->map(fn ($message) => [
+                    'id' => $message->id,
+                    'body' => $message->body,
+                    'user_name' => $message->user->name,
+                    'is_own' => $message->user_id === $user->id,
+                    'created_at' => $message->created_at,
+                ])->values(),
+            ],
+            'users' => $this->otherUsers($user),
+        ]);
+    }
+
+    /**
+     * Start a conversation with one or more people. A chat between two people is reused
+     * if it already exists.
+     */
+    public function store(Request $request)
+    {
+        $user = $request->user();
+
+        $data = $request->validate([
+            'user_ids' => ['required', 'array', 'min:1'],
+            'user_ids.*' => ['integer', 'distinct', Rule::exists('users', 'id'), Rule::notIn([$user->id])],
+            'name' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $memberIds = collect($data['user_ids'])->push($user->id)->unique()->values();
+        $name = filled($data['name'] ?? null) ? $data['name'] : null;
+
+        if ($memberIds->count() === 2 && $name === null) {
+            $existing = Conversation::query()
+                ->whereNull('name')
+                ->has('users', '=', 2)
+                ->whereHas('users', fn ($users) => $users->whereKey($memberIds[0]))
+                ->whereHas('users', fn ($users) => $users->whereKey($memberIds[1]))
+                ->first();
+
+            if ($existing) {
+                return redirect()->route('conversation.show', $existing);
+            }
+        }
+
+        $conversation = DB::transaction(function () use ($user, $memberIds, $name) {
+            $conversation = Conversation::create([
+                'name' => $name,
+                'user_id' => $user->id,
+            ]);
+            $conversation->users()->attach($memberIds->all());
+            $conversation->markAsReadBy($user);
 
             return $conversation;
         });
-        return inertia('Conversations/Index', compact('conversations', 'conversation'));
-        // return inertia('Conversations/Index');
+
+        return redirect()->route('conversation.show', $conversation);
     }
-    public function show(Conversation $conversation)
+
+    /**
+     * The signed-in user's conversations, most recently active first.
+     */
+    private function conversationList(User $user)
     {
-        // dd($conversation);
-        // $conversations = $request->conversations;
-        $conversations = Conversation::with(['messages', 'users'])->get();
-        // $conversations = $request->user()->conversations;
-        // $request->user()->conversations()->updateExistingPivot($conversation, [
-        //     'read_at' => now(),
-        // ]);
-        return inertia('Layouts/Content', compact('conversations', 'conversation'));
+        return Conversation::query()
+            ->select('conversations.*')
+            ->forUser($user)
+            ->withUnreadCountFor($user)
+            ->with(['users', 'latestMessage.user'])
+            ->orderByDesc('last_massage_at')
+            ->orderByDesc('id')
+            ->get()
+            ->map(fn (Conversation $conversation) => [
+                'uuid' => $conversation->uuid,
+                'title' => $conversation->titleFor($user),
+                'is_group' => $conversation->users->count() > 2,
+                'unread_count' => (int) $conversation->unread_count,
+                'last_message' => $conversation->latestMessage ? [
+                    'body' => $conversation->latestMessage->body,
+                    'user_name' => $conversation->latestMessage->user_id === $user->id
+                        ? 'You'
+                        : $conversation->latestMessage->user->name,
+                    'created_at' => $conversation->latestMessage->created_at,
+                ] : null,
+            ])
+            ->values();
+    }
+
+    /**
+     * People the user can start a conversation with.
+     */
+    private function otherUsers(User $user)
+    {
+        return User::query()
+            ->whereKeyNot($user->id)
+            ->orderBy('name')
+            ->get(['id', 'name'])
+            ->map(fn (User $other) => ['id' => $other->id, 'name' => $other->name])
+            ->values();
     }
 }
